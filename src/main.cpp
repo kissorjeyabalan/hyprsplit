@@ -13,6 +13,16 @@
 
 using namespace Hyprutils::String;
 
+// Helper for remapping monitor IDs as requested
+int remapMonitorID(int monitorID) {
+    switch (monitorID) {
+        case 0: return 2;
+        case 1: return 0;
+        case 2: return 1;
+        default: return monitorID;
+    }
+}
+
 std::string getWorkspaceOnCurrentMonitor(const std::string& workspace) {
     if (!g_pCompositor->m_lastMonitor) {
         Debug::log(ERR, "[hyprsplit] no monitor in getWorkspaceOnCurrentMonitor?");
@@ -21,6 +31,8 @@ std::string getWorkspaceOnCurrentMonitor(const std::string& workspace) {
 
     int                wsID          = 1;
     static auto* const NUMWORKSPACES = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprsplit:num_workspaces")->getDataStaticPtr();
+
+    int monitor_id = remapMonitorID(g_pCompositor->m_lastMonitor->m_id);
 
     if (workspace[0] == '+' || workspace[0] == '-') {
         const auto PLUSMINUSRESULT = getPlusMinusKeywordResult(workspace, ((g_pCompositor->m_lastMonitor->activeWorkspaceID() - 1) % **NUMWORKSPACES) + 1);
@@ -49,7 +61,7 @@ std::string getWorkspaceOnCurrentMonitor(const std::string& workspace) {
     } else if (workspace.starts_with("empty")) {
         int i = 0;
         while (++i <= **NUMWORKSPACES) {
-            const int  id         = g_pCompositor->m_lastMonitor->m_id * (**NUMWORKSPACES) + i;
+            const int  id         = monitor_id * (**NUMWORKSPACES) + i;
             const auto PWORKSPACE = g_pCompositor->getWorkspaceByID(id);
 
             if (!PWORKSPACE || (PWORKSPACE->getWindows() == 0))
@@ -65,7 +77,7 @@ std::string getWorkspaceOnCurrentMonitor(const std::string& workspace) {
     if (wsID > **NUMWORKSPACES)
         wsID = ((wsID - 1) % **NUMWORKSPACES) + 1;
 
-    return std::to_string(g_pCompositor->m_lastMonitor->m_id * (**NUMWORKSPACES) + wsID);
+    return std::to_string(monitor_id * (**NUMWORKSPACES) + wsID);
 }
 
 void ensureGoodWorkspaces() {
@@ -79,8 +91,9 @@ void ensureGoodWorkspaces() {
         if (m->m_id == MONITOR_INVALID || m->isMirror())
             continue;
 
-        const int MIN = m->m_id * (**NUMWORKSPACES) + 1;
-        const int MAX = (m->m_id + 1) * (**NUMWORKSPACES);
+        int mapped_id = remapMonitorID(m->m_id);
+        const int MIN = mapped_id * (**NUMWORKSPACES) + 1;
+        const int MAX = (mapped_id + 1) * (**NUMWORKSPACES);
 
         if (m->activeWorkspaceID() < MIN || m->activeWorkspaceID() > MAX) {
             Debug::log(LOG, "[hyprsplit] {} {} active workspace {} out of bounds, changing workspace to {}", m->m_name, m->m_id, m->activeWorkspaceID(), MIN);
@@ -100,8 +113,9 @@ void ensureGoodWorkspaces() {
         if (m->m_id == MONITOR_INVALID || m->isMirror())
             continue;
 
-        const int  MIN = m->m_id * (**NUMWORKSPACES) + 1;
-        const int  MAX = (m->m_id + 1) * (**NUMWORKSPACES);
+        int mapped_id = remapMonitorID(m->m_id);
+        const int  MIN = mapped_id * (**NUMWORKSPACES) + 1;
+        const int  MAX = (mapped_id + 1) * (**NUMWORKSPACES);
 
         const auto WSSIZE = g_pCompositor->m_workspaces.size();
         for (size_t i = 0; i < WSSIZE; i++) {
@@ -130,6 +144,12 @@ void ensureGoodWorkspaces() {
     }
 }
 
+SDispatchResult ensureWorkspace(std::string args) {
+    ensureGoodWorkspaces();
+    g_pKeybindManager->m_dispatchers["ensure"](args);
+    return {};
+}
+
 SDispatchResult focusWorkspace(std::string args) {
     const auto PCURRMONITOR = g_pCompositor->m_lastMonitor;
 
@@ -137,6 +157,8 @@ SDispatchResult focusWorkspace(std::string args) {
         Debug::log(ERR, "[hyprsplit] focusWorkspace: monitor doesn't exist");
         return {.success = false, .error = "focusWorkspace: monitor doesn't exist"};
     }
+
+    int mapped_id = remapMonitorID(PCURRMONITOR->m_id);
 
     const int WORKSPACEID = getWorkspaceIDNameFromString(getWorkspaceOnCurrentMonitor(args)).id;
 
@@ -153,8 +175,8 @@ SDispatchResult focusWorkspace(std::string args) {
     }
 
     static auto* const NUMWORKSPACES = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprsplit:num_workspaces")->getDataStaticPtr();
-    const int          MIN           = PCURRMONITOR->m_id * (**NUMWORKSPACES) + 1;
-    const int          MAX           = (PCURRMONITOR->m_id + 1) * (**NUMWORKSPACES);
+    const int          MIN           = mapped_id * (**NUMWORKSPACES) + 1;
+    const int          MAX           = (mapped_id + 1) * (**NUMWORKSPACES);
     if (PWORKSPACE->monitorID() != PCURRMONITOR->m_id && (WORKSPACEID >= MIN && WORKSPACEID <= MAX)) {
         Debug::log(WARN, "[hyprsplit] focusWorkspace: workspace exists but is on the wrong monitor?");
         ensureGoodWorkspaces();
@@ -358,8 +380,9 @@ SDispatchResult grabRogueWindows(std::string args) {
         bool inGoodWorkspace = false;
 
         for (auto& m : g_pCompositor->m_monitors) {
-            const int MIN = m->m_id * (**NUMWORKSPACES) + 1;
-            const int MAX = (m->m_id + 1) * (**NUMWORKSPACES);
+            int mapped_id = remapMonitorID(m->m_id);
+            const int MIN = mapped_id * (**NUMWORKSPACES) + 1;
+            const int MAX = (mapped_id + 1) * (**NUMWORKSPACES);
 
             if (w->workspaceID() >= MIN && w->workspaceID() <= MAX) {
                 inGoodWorkspace = true;
@@ -388,9 +411,11 @@ void onMonitorRemoved(PHLMONITOR pMonitor) {
     static auto* const NUMWORKSPACES = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprsplit:num_workspaces")->getDataStaticPtr();
     static auto* const PERSISTENT    = (Hyprlang::INT* const*)HyprlandAPI::getConfigValue(PHANDLE, "plugin:hyprsplit:persistent_workspaces")->getDataStaticPtr();
 
+    int mapped_id = remapMonitorID(pMonitor->m_id);
+
     if (**PERSISTENT) {
-        const int  MIN = pMonitor->m_id * (**NUMWORKSPACES) + 1;
-        const int  MAX = (pMonitor->m_id + 1) * (**NUMWORKSPACES);
+        const int  MIN = mapped_id * (**NUMWORKSPACES) + 1;
+        const int  MAX = (mapped_id + 1) * (**NUMWORKSPACES);
 
         const auto WSSIZE = g_pCompositor->m_workspaces.size();
         for (size_t i = 0; i < WSSIZE; i++) {
@@ -431,6 +456,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     HyprlandAPI::addConfigValue(PHANDLE, "plugin:hyprsplit:persistent_workspaces", Hyprlang::INT{0});
 
     HyprlandAPI::addDispatcherV2(PHANDLE, "split:workspace", focusWorkspace);
+    HyprlandAPI::addDispatcherV2(PHANDLE, "split:ensure", ensureWorkspace);
     HyprlandAPI::addDispatcherV2(PHANDLE, "split:movetoworkspace", moveToWorkspace);
     HyprlandAPI::addDispatcherV2(PHANDLE, "split:movetoworkspacesilent", moveToWorkspaceSilent);
     HyprlandAPI::addDispatcherV2(PHANDLE, "split:swapactiveworkspaces", swapActiveWorkspaces);
